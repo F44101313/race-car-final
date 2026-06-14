@@ -19,8 +19,8 @@ int s[5] = {0, 0, 0, 0, 0};
 
 // --- 左馬達 (Motor A - 負責左側前後兩輪) ---
 const int ENA = 13; 
-const int IN1 = 12;
-const int IN2 = 14;
+const int IN1 = 12; 
+const int IN2 = 14; 
 
 // --- 右馬達 (Motor B - 負責右側前後兩輪) ---
 const int IN3 = 21; 
@@ -28,9 +28,12 @@ const int IN4 = 22;
 const int ENB = 23; 
 
 // ==========================================
-// 系統狀態變數
+// 系統狀態與記憶變數
 // ==========================================
 bool isAutonomous = false; 
+
+// 短期記憶變數：紀錄最後一次看到線的位置 ('C'=中間, 'L'=左邊, 'R'=右邊)
+char lastKnown = 'C'; 
 
 // ==========================================
 // 基礎設定 (Setup)
@@ -62,7 +65,7 @@ void setup() {
 
   // 系統剛通電，馬達靜止，進入「安全狀態」
   stopMotors();
-  setASL(0, 1, 0); 
+  setASL(0, 1, 0); // 綠燈恆亮
   Serial.println("系統就緒 (安全狀態)。等待藍牙 VLS (發送 G) 觸發...");
 }
 
@@ -101,7 +104,7 @@ void loop() {
   // ---------------------------------------------------------
   Serial.print("感測器: ");
   for (int i = 0; i < 5; i++) {
-    s[i] = !digitalRead(sensorPins[i]); 
+    s[i] = !digitalRead(sensorPins[i]); // 加 '!' 將白底變0，黑線變1
     Serial.print(s[i]);                
     Serial.print(" ");                 
   }
@@ -118,47 +121,63 @@ void loop() {
   }
 
   // ---------------------------------------------------------
-  // 狀態 2：自主導航循跡 (含動態參數遙測)
+  // 狀態 2：自主導航循跡 (高速競技版參數)
   // ---------------------------------------------------------
   Serial.print("狀態: 循跡中 | "); 
 
-  // 建立暫存變數，準備記錄即將發送給馬達的數值
   int currentL = 0;
   int currentR = 0;
   String action = "";
 
-  // 狀態 A：直線置中 -> 穩速慢行
-  if (s[2] == 1) {
-    currentL = 100; currentR = 100; action = "直線置中";
-    moveForward(currentL, currentR); 
-  }
-  // 狀態 B：微左修正 -> 左輪煞停，右輪繼續推 (單輪轉向)
-  else if (s[1] == 1) {
-    currentL = 0; currentR = 100; action = "微左修正";
-    moveForward(currentL, currentR);  
-  }
-  // 狀態 C：急左彎 -> 坦克式原地緩慢旋轉
-  else if (s[0] == 1) {
-    currentL = -80; currentR = 80; action = "急左彎(坦克)"; 
-    turnLeft(140);         
-  }
-  // 狀態 D：微右修正 -> 右輪煞停，左輪繼續推 (單輪轉向)
-  else if (s[3] == 1) {
-    currentL = 100; currentR = 0; action = "微右修正";
-    moveForward(currentL, currentR);  
-  }
-  // 狀態 E：急右彎 -> 坦克式原地緩慢旋轉
-  else if (s[4] == 1) {
-    currentL = 80; currentR = -80; action = "急右彎(坦克)"; 
-    turnRight(140);        
-  }
-  // 狀態 F：防呆煞車
-  else if (s[0]==0 && s[1]==0 && s[2]==0 && s[3]==0 && s[4]==0) {
-    currentL = 0; currentR = 0; action = "防呆煞車";
-    stopMotors(); 
+  // --- 記憶更新區 ---
+  if (s[0] == 1 || s[1] == 1) {
+    lastKnown = 'L'; // 記住：線在左邊
+  } else if (s[4] == 1 || s[3] == 1) {
+    lastKnown = 'R'; // 記住：線在右邊
+  } else if (s[2] == 1) {
+    lastKnown = 'C'; // 記住：線在中間
   }
 
-  // 漂亮地印出當下的動作與左右輪轉速，並換行
+  // --- 馬達控制區 (等比例放大高速版) ---
+  
+  // --- 馬達控制區 (幾何最佳化版) ---
+  if (s[2] == 1) {
+    currentL = 150; currentR = 150; action = "直線置中";
+    moveForward(currentL, currentR); 
+  }
+  else if (s[1] == 1) {
+    currentL = 100; currentR = 200; action = "微左(1:2)";
+    moveForward(currentL, currentR);  
+  }
+  else if (s[0] == 1) {
+    currentL = -150; currentR = 150; action = "急左彎(坦克)"; 
+    turnLeft(150);         
+  }
+  else if (s[3] == 1) {
+    currentL = 200; currentR = 100; action = "微右(1:2)";
+    moveForward(currentL, currentR);  
+  }
+  else if (s[4] == 1) {
+    currentL = 150; currentR = -150; action = "急右彎(坦克)"; 
+    turnRight(150);        
+  }
+  // 遇到全白 (大直角或斷線)：啟動短期記憶搜尋
+  else if (s[0]==0 && s[1]==0 && s[2]==0 && s[3]==0 && s[4]==0) {
+    if (lastKnown == 'L') {
+      currentL = -150; currentR = 150; action = "迷失:記憶尋左";
+      turnLeft(150);
+    } 
+    else if (lastKnown == 'R') {
+      currentL = 150; currentR = -150; action = "迷失:記憶尋右";
+      turnRight(150);
+    } 
+    else {
+      currentL = 0; currentR = 0; action = "徹底迷失:煞車";
+      stopMotors();
+    }
+  }
+
+  // 遙測系統：印出當下動作與左右輪轉速
   Serial.print("動作: ");
   Serial.print(action);
   Serial.print(" | 左輪: ");
